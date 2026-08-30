@@ -7,13 +7,20 @@
 //! XDR layout change silently drifts half a dozen independent parsers.
 //!
 //! This crate is the M1 foundation for every subsequent trace-consumer (CLI
-//! extractor, fuzz trace invariants, trace schema). It turns a single XDR
-//! buffer — a `soroban_sdk::xdr::SorobanTransactionMeta` payload, i.e. a
-//! Soroban contract-invocation result with its attached environment
-//! diagnostics — into a typed, lossless [`ContractTrace`], without
-//! panicking on malformed or truncated input.
+//! extractor, fuzz trace invariants, trace schema). It turns an XDR buffer
+//! into a typed, lossless [`ContractTrace`], without panicking on malformed
+//! or truncated input.
 //!
 //! # What is decoded
+//!
+//! Two entrypoints cover the two shapes the XDR arrives in:
+//!
+//! - [`decode_transaction_meta`] consumes the outer `resultMetaXdr` envelope a
+//!   Soroban RPC returns for a submitted transaction (a
+//!   `soroban_sdk::xdr::TransactionMeta`, whose protocol-20+ `V3` arm nests the
+//!   soroban meta). This is the artifact `scripts/capture_trace.sh` persists.
+//! - [`decode_trace`] consumes the inner `soroban_sdk::xdr::SorobanTransactionMeta`
+//!   payload directly.
 //!
 //! The trace is reconstructed from both parts of the meta payload:
 //!
@@ -49,7 +56,9 @@ pub mod decode;
 pub mod error;
 pub mod model;
 
-pub use decode::{decode_contract_events, decode_diagnostic_events, decode_trace};
+pub use decode::{
+    decode_contract_events, decode_diagnostic_events, decode_trace, decode_transaction_meta,
+};
 pub use error::TraceError;
 pub use model::{ContractId, ContractTrace};
 

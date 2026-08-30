@@ -8,10 +8,10 @@ mod common;
 
 use soroban_sdk::xdr::{
     ContractEvent, ContractEventBody, ContractEventType, ContractEventV0, ExtensionPoint, Hash,
-    Limits, SorobanTransactionMeta, WriteXdr,
+    Limits, SorobanTransactionMeta, TransactionMeta, TransactionMetaV3, VecM, WriteXdr,
 };
 
-use xdr_trace::{decode_contract_events, decode_trace, ContractId};
+use xdr_trace::{decode_contract_events, decode_trace, decode_transaction_meta, ContractId};
 
 /// A tiny deterministic xorshift64* PRNG.
 struct XorShift(u64);
@@ -49,17 +49,35 @@ fn random_and_truncated_buffers_never_panic() {
         let len = (rng.next() as usize) % (buffer.len() + 1);
         let _ = decode_trace(&buffer[..len]);
         let _ = decode_contract_events(&buffer[..len]);
+        let _ = decode_transaction_meta(&buffer[..len]);
     }
 }
 
-/// Every prefix of the valid encoded fixture and every single-bit corruption
-/// of it completes without panicking.
+/// A convenience wrapping of the canonical meta in the `TransactionMeta::V3`
+/// arm, i.e. the shape `resultMetaXdr` arrives in.
+fn wrapped_tx_meta() -> TransactionMeta {
+    TransactionMeta::V3(TransactionMetaV3 {
+        ext: ExtensionPoint::V0,
+        tx_changes_before: VecM::default(),
+        operations: VecM::default(),
+        tx_changes_after: VecM::default(),
+        soroban_meta: Some(common::build_fixture_meta()),
+    })
+}
+
+/// Every prefix of the valid encoded fixture (both the inner payload and the
+/// `TransactionMeta` envelope) and every single-bit corruption of it completes
+/// without panicking.
 #[test]
 fn valid_fixture_truncated_and_bitflipped_never_panics() {
     let bytes = common::build_fixture_meta().to_xdr(Limits::none()).expect("xdr encode");
+    let envelope = wrapped_tx_meta().to_xdr(Limits::none()).expect("xdr encode");
 
     for n in 0..=bytes.len() {
         let _ = decode_trace(&bytes[..n]);
+    }
+    for n in 0..=envelope.len() {
+        let _ = decode_transaction_meta(&envelope[..n]);
     }
 
     for (i, byte) in bytes.iter().enumerate() {
@@ -67,6 +85,14 @@ fn valid_fixture_truncated_and_bitflipped_never_panics() {
             let mut corrupted = bytes.clone();
             corrupted[i] ^= 1 << bit;
             let _ = decode_trace(&corrupted);
+        }
+    }
+
+    for (i, byte) in envelope.iter().enumerate() {
+        for bit in 0..u8::BITS {
+            let mut corrupted = envelope.clone();
+            corrupted[i] ^= 1 << bit;
+            let _ = decode_transaction_meta(&corrupted);
         }
     }
 }

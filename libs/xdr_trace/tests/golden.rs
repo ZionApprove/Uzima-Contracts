@@ -2,9 +2,11 @@
 
 mod common;
 
-use soroban_sdk::xdr::{Limits, WriteXdr};
+use soroban_sdk::xdr::{ExtensionPoint, Limits, TransactionMeta, TransactionMetaV3, VecM, WriteXdr};
 
-use xdr_trace::{decode_diagnostic_events, decode_trace, TraceError};
+use xdr_trace::{
+    decode_diagnostic_events, decode_trace, decode_transaction_meta, TraceError,
+};
 
 /// The round-tripped canonical fixture decodes to the expected `ContractTrace`.
 #[test]
@@ -107,4 +109,58 @@ fn diagnostic_events_decode_standalone() {
 
     let decoded = decode_diagnostic_events(&blob).expect("decode diagnostics");
     assert_eq!(decoded, diagnostics);
+}
+
+/// The RPC `resultMetaXdr` path: a `TransactionMeta` wrapping the soroban meta
+/// in its `V3` arm decodes to the same trace via `decode_transaction_meta`.
+#[test]
+fn transaction_meta_v3_round_trip_decodes_to_expected_trace() {
+    let meta = common::build_fixture_meta();
+    let tx_meta = TransactionMeta::V3(TransactionMetaV3 {
+        ext: ExtensionPoint::V0,
+        tx_changes_before: VecM::default(),
+        operations: VecM::default(),
+        tx_changes_after: VecM::default(),
+        soroban_meta: Some(meta),
+    });
+    let bytes = tx_meta.to_xdr(Limits::none()).expect("xdr encode");
+
+    let trace = decode_transaction_meta(&bytes).expect("decode transaction meta");
+    assert_eq!(trace, common::expected_trace());
+
+    // The two raw buffers are *not* interchangeable: the envelope does not
+    // decode through `decode_trace`, and the inner payload is never accepted
+    // by `decode_transaction_meta` (it is not a structurally valid
+    // `TransactionMeta` envelope).
+    assert!(matches!(decode_trace(&bytes), Err(TraceError::InvalidXdr(_))));
+    let inner = common::build_fixture_meta().to_xdr(Limits::none()).expect("xdr encode");
+    assert!(decode_transaction_meta(&inner).is_err());
+}
+
+/// Meta that carries no soroban invocation record — the pre-protocol-20 arms or
+/// a `V3` without a soroban meta — surfaces as a typed
+/// `MissingInvocationRecord`, never a panic.
+#[test]
+fn transaction_meta_without_soroban_meta_errors_typed() {
+    assert_eq!(decode_transaction_meta(&[]), Err(TraceError::EmptyInput));
+
+    let no_meta = TransactionMeta::V3(TransactionMetaV3 {
+        ext: ExtensionPoint::V0,
+        tx_changes_before: VecM::default(),
+        operations: VecM::default(),
+        tx_changes_after: VecM::default(),
+        soroban_meta: None,
+    });
+    let bytes = no_meta.to_xdr(Limits::none()).expect("xdr encode");
+    assert!(matches!(
+        decode_transaction_meta(&bytes),
+        Err(TraceError::MissingInvocationRecord)
+    ));
+
+    let classic = TransactionMeta::V0(VecM::default());
+    let bytes = classic.to_xdr(Limits::none()).expect("xdr encode");
+    assert!(matches!(
+        decode_transaction_meta(&bytes),
+        Err(TraceError::MissingInvocationRecord)
+    ));
 }

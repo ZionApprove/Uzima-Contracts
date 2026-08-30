@@ -8,7 +8,7 @@
 
 use soroban_sdk::xdr::{
     ContractEvent, ContractEventBody, DiagnosticEvent, DiagnosticEvents, Limits, ReadXdr, ScVal,
-    SorobanTransactionMeta, VecM,
+    SorobanTransactionMeta, TransactionMeta, TransactionMetaV3, VecM,
 };
 
 use crate::error::TraceError;
@@ -23,6 +23,10 @@ use crate::model::{ContractId, ContractTrace};
 /// host-level `fn_call`/`fn_return` diagnostics embedded in it let the decoder
 /// reconstruct the invoked contract, the function symbol, the arguments and the
 /// transitively invoked contracts.
+///
+/// Prefer [`decode_transaction_meta`] when the input is the outer
+/// `resultMetaXdr` envelope a Soroban RPC returns: this entrypoint expects the
+/// inner `SorobanTransactionMeta` bytes only.
 ///
 /// # Errors
 ///
@@ -42,6 +46,37 @@ pub fn decode_trace(bytes: &[u8]) -> Result<ContractTrace, TraceError> {
         .map_err(TraceError::InvalidXdr)?;
 
     trace_from_meta(&meta)
+}
+
+/// Decodes a full invocation trace from a [`TransactionMeta`] XDR buffer —
+/// the exact `resultMetaXdr` payload a Soroban RPC returns for a submitted
+/// transaction. `soroban contract invoke` persists that payload unchanged in
+/// its on-disk RPC-action log, where `scripts/capture_trace.sh` harvests it.
+///
+/// A Soroban transaction nests the [`SorobanTransactionMeta`] inside the
+/// `TransactionMeta::V3` arm (protocol 20+). This entrypoint unwraps that arm
+/// and then behaves identically to [`decode_trace`]. Meta that carries no
+/// invocation record — the non-Soroban `V0`/`V1`/`V2` arms, or a `V3` without
+/// a soroban meta — yields [`TraceError::MissingInvocationRecord`].
+///
+/// # Errors
+///
+/// See [`decode_trace`].
+pub fn decode_transaction_meta(bytes: &[u8]) -> Result<ContractTrace, TraceError> {
+    if bytes.is_empty() {
+        return Err(TraceError::EmptyInput);
+    }
+
+    let meta = TransactionMeta::from_xdr(bytes, Limits::none()).map_err(TraceError::InvalidXdr)?;
+    let soroban_meta = match meta {
+        TransactionMeta::V3(TransactionMetaV3 {
+            soroban_meta: Some(meta),
+            ..
+        }) => meta,
+        _ => return Err(TraceError::MissingInvocationRecord),
+    };
+
+    trace_from_meta(&soroban_meta)
 }
 
 /// Decodes a `DiagnosticEvents` XDR buffer (a `VecM<DiagnosticEvent>`) into an
